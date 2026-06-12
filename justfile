@@ -54,6 +54,24 @@ dev:
 serve:
     uv run uvicorn backend.main:app --host 0.0.0.0 --port 8000
 
+# --- frontend ---
+
+# Install frontend deps with bun
+fe-install:
+    cd frontend && bun install
+
+# Run Next.js dev server
+fe-dev:
+    cd frontend && bun run dev
+
+# Build Next.js for production
+fe-build:
+    cd frontend && bun run build
+
+# Start built Next.js
+fe-start:
+    cd frontend && bun run start
+
 # --- smoke test ---
 
 # End-to-end smoke: upload demo.csv, wait for agent loop, print Bless report
