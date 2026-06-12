@@ -1,8 +1,9 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ActionList } from "@/components/ActionList";
 import { AppShell } from "@/components/AppShell";
+import { SourceFilter } from "@/components/SourceFilter";
 import { SpendDonut } from "@/components/SpendDonut";
 import {
   cacheReport,
@@ -14,6 +15,50 @@ import {
   Report,
 } from "@/lib/api";
 
+// Sources present across all action items, in a stable order.
+function reportSources(report: Report): string[] {
+  const seen = new Set<string>();
+  for (const g of report.action_groups) {
+    for (const it of g.items) seen.add(it.source);
+  }
+  return [...seen].sort();
+}
+
+const PRIORITY_BUCKET: Record<string, "critical" | "medium" | "easy"> = {
+  HIGH: "critical",
+  MEDIUM: "medium",
+  LOW: "easy",
+};
+
+// Drop excluded sources and recompute the figures derived from action items so
+// the savings/issue numbers stay consistent with what's shown.
+function applySourceFilter(report: Report, excluded: string[]): Report {
+  if (excluded.length === 0) return report;
+  const drop = new Set(excluded);
+
+  const action_groups = report.action_groups.map((g) => {
+    const items = g.items.filter((it) => !drop.has(it.source));
+    return {
+      ...g,
+      items,
+      total_savings: items.reduce((s, it) => s + it.monthly_savings, 0),
+    };
+  });
+
+  const items = action_groups.flatMap((g) => g.items);
+  const potential = items.reduce((s, it) => s + it.monthly_savings, 0);
+  const issues = { total: items.length, critical: 0, medium: 0, easy: 0 };
+  for (const it of items) issues[PRIORITY_BUCKET[it.priority]] += 1;
+
+  return {
+    ...report,
+    action_groups,
+    potential_monthly_savings: potential,
+    annual_savings: potential * 12,
+    issues_found: issues,
+  };
+}
+
 const POLL_INTERVAL_MS = 3000;
 
 export default function DashboardPage() {
@@ -22,6 +67,7 @@ export default function DashboardPage() {
   const [pendingStatus, setPendingStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [excludedSources, setExcludedSources] = useState<string[]>([]);
 
   useEffect(() => {
     const id = getJobId();
@@ -75,6 +121,12 @@ export default function DashboardPage() {
     };
   }, []);
 
+  const sources = useMemo(() => (report ? reportSources(report) : []), [report]);
+  const filtered = useMemo(
+    () => (report ? applySourceFilter(report, excludedSources) : null),
+    [report, excludedSources],
+  );
+
   if (error === "no-job") {
     return (
       <AppShell>
@@ -83,7 +135,7 @@ export default function DashboardPage() {
     );
   }
 
-  if (!report) {
+  if (!report || !filtered) {
     return (
       <AppShell>
         <div className="grid min-h-full place-items-center text-neutral-400">
@@ -93,7 +145,12 @@ export default function DashboardPage() {
     );
   }
 
-  const issues = report.issues_found;
+  const issues = filtered.issues_found;
+
+  const toggleSource = (s: string) =>
+    setExcludedSources((prev) =>
+      prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s],
+    );
 
   const refreshing = pendingStatus !== null && !error;
 
@@ -109,21 +166,24 @@ export default function DashboardPage() {
           </div>
         )}
         {/* header */}
-        <div className="flex items-start justify-between">
+        <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold">Savings Report</h1>
             <p className="text-sm text-neutral-400">Based on your upload · {report.generated_at}</p>
           </div>
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#fef2f2] px-3 py-1 text-sm font-medium text-[#ef4444]">
-            ⚠ {issues.total} issue{issues.total === 1 ? "" : "s"} found
-          </span>
+          <div className="flex items-center gap-3">
+            <SourceFilter sources={sources} excluded={excludedSources} onToggle={toggleSource} />
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-[#fef2f2] px-3 py-1 text-sm font-medium text-[#ef4444]">
+              ⚠ {issues.total} issue{issues.total === 1 ? "" : "s"} found
+            </span>
+          </div>
         </div>
 
         {/* summary cards */}
         <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Stat label="Monthly Spend" value={`$${money(report.total_monthly_spend)}`} sub={`across ${report.vendor_count} vendors`} icon="$" />
-          <Stat label="Potential Savings" value={`$${money(report.potential_monthly_savings)}/mo`} sub={`$${money(report.annual_savings)}/year`} icon="↘" accent />
-          <Stat label="Annual Savings" value={`$${money(report.annual_savings)}`} sub="ROI in first month" icon="📅" green />
+          <Stat label="Potential Savings" value={`$${money(filtered.potential_monthly_savings)}/mo`} sub={`$${money(filtered.annual_savings)}/year`} icon="↘" accent />
+          <Stat label="Annual Savings" value={`$${money(filtered.annual_savings)}`} sub="ROI in first month" icon="📅" green />
           <Stat
             label="Issues Found"
             value={`${issues.total}`}
@@ -138,7 +198,7 @@ export default function DashboardPage() {
           <div>
             <div className="text-xs uppercase tracking-wide text-neutral-400">Savings highlighted</div>
             <div className="mt-1 text-3xl font-bold text-[#ff5a4d]">
-              ${money(report.potential_monthly_savings)}
+              ${money(filtered.potential_monthly_savings)}
               <span className="text-base font-normal text-neutral-400">/month</span>
             </div>
             <div className="mt-1 text-sm text-neutral-400">
@@ -146,7 +206,7 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="text-right">
-            <div className="text-sm text-neutral-400">= ${money(report.annual_savings)}/year</div>
+            <div className="text-sm text-neutral-400">= ${money(filtered.annual_savings)}/year</div>
             <div className="font-semibold">a full engineer&apos;s tools budget</div>
           </div>
         </div>
@@ -160,7 +220,7 @@ export default function DashboardPage() {
             </p>
             <SpendDonut categories={report.categories} />
           </div>
-          <ActionList groups={report.action_groups} jobId={jobId!} />
+          <ActionList groups={filtered.action_groups} jobId={jobId!} />
         </div>
       </div>
     </AppShell>
