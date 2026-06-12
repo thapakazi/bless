@@ -20,12 +20,47 @@ const DOMAINS: Record<string, string> = {
 };
 
 const FIELD_LABELS: Record<string, string> = {
-  pat: "Personal Access Token",
+  pat: "Personal Access Token (ghp_…)",
   access_key_id: "Access Key ID",
   secret_access_key: "Secret Access Key",
   region: "Region (e.g. us-east-1)",
   account_id: "Account ID",
   token: "API Token",
+};
+
+interface Instructions {
+  title: string;
+  steps: string[];
+  link?: { label: string; href: string };
+}
+
+const INSTRUCTIONS: Record<string, Instructions> = {
+  github: {
+    title: "How to create a Personal Access Token",
+    steps: [
+      "Open GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic).",
+      'Click "Generate new token (classic)" and give it a name + expiration.',
+      "Select the read:org scope (unlocks GitHub Actions usage). Plan info needs no scope.",
+      "Generate, then copy the token (starts with ghp_) and paste it above.",
+    ],
+    link: {
+      label: "Create token on GitHub ›",
+      href: "https://github.com/settings/tokens/new?scopes=read:org&description=Bless%20billing",
+    },
+  },
+  aws: {
+    title: "How to get your AWS access keys",
+    steps: [
+      "Sign in to the AWS Console → IAM → Users → your user → Security credentials.",
+      'Under "Access keys", create a new key (use case: Third-party service).',
+      "Copy the Access Key ID and Secret Access Key.",
+      "Use the region where billing is enabled (e.g. us-east-1). Read-only ce:GetCostAndUsage is enough.",
+    ],
+    link: {
+      label: "Open IAM security credentials ›",
+      href: "https://console.aws.amazon.com/iam/home#/security_credentials",
+    },
+  },
 };
 
 export default function ConnectionsPage() {
@@ -156,6 +191,29 @@ function ProviderCard({
           </p>
         )}
       </div>
+
+      {INSTRUCTIONS[provider.provider] && (
+        <details className="mt-3 rounded-lg bg-neutral-50 px-3 py-2">
+          <summary className="cursor-pointer select-none text-xs font-medium text-neutral-600">
+            {INSTRUCTIONS[provider.provider].title}
+          </summary>
+          <ol className="mt-2 list-decimal space-y-1 pl-4 text-[11px] leading-relaxed text-neutral-500">
+            {INSTRUCTIONS[provider.provider].steps.map((s, i) => (
+              <li key={i}>{s}</li>
+            ))}
+          </ol>
+          {INSTRUCTIONS[provider.provider].link && (
+            <a
+              href={INSTRUCTIONS[provider.provider].link!.href}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-2 inline-block text-[11px] font-medium text-blue-600 hover:underline"
+            >
+              {INSTRUCTIONS[provider.provider].link!.label}
+            </a>
+          )}
+        </details>
+      )}
 
       {error && <p className="mt-2 text-sm text-[#ef4444]">{error}</p>}
 
