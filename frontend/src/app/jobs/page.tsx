@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { clearJob, deleteJob, getJobId, JobSummary, listJobs, setJobId } from "@/lib/api";
+import { clearCachedReport, clearJob, deleteJob, getJobId, JobSummary, listJobs, setJobId } from "@/lib/api";
 import { useRouter } from "next/navigation";
 
 const IN_FLIGHT = new Set(["ingested", "investigating", "detecting", "reporting"]);
@@ -29,6 +29,7 @@ export default function JobsPage() {
     setDeleting(jobId);
     try {
       await deleteJob(jobId);
+      clearCachedReport(jobId);
       if (getJobId() === jobId) clearJob();
       setJobs((curr) => (curr ?? []).filter((j) => j.job_id !== jobId));
     } catch (e) {

@@ -4,13 +4,21 @@ import { useEffect, useState } from "react";
 import { ActionList } from "@/components/ActionList";
 import { AppShell } from "@/components/AppShell";
 import { SpendDonut } from "@/components/SpendDonut";
-import { getJobId, getReport, getStatus, money, Report } from "@/lib/api";
+import {
+  cacheReport,
+  getJobId,
+  getReport,
+  getStatus,
+  money,
+  readCachedReport,
+  Report,
+} from "@/lib/api";
 
-const TERMINAL_STATUSES = new Set(["complete", "failed"]);
 const POLL_INTERVAL_MS = 3000;
 
 export default function DashboardPage() {
   const [report, setReport] = useState<Report | null>(null);
+  const [stale, setStale] = useState(false);
   const [pendingStatus, setPendingStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -21,6 +29,13 @@ export default function DashboardPage() {
     if (!id) {
       setError("no-job");
       return;
+    }
+
+    // Optimistic render: paint cached report immediately if available.
+    const cached = readCachedReport(id);
+    if (cached) {
+      setReport(cached.report);
+      setStale(!cached.fresh);
     }
 
     let cancelled = false;
@@ -37,7 +52,10 @@ export default function DashboardPage() {
           if (s.status === "complete") {
             return getReport(id).then((r) => {
               if (cancelled) return;
+              cacheReport(id, r);
               setReport(r);
+              setStale(false);
+              setPendingStatus(null);
               setError(null);
             });
           }
@@ -77,9 +95,19 @@ export default function DashboardPage() {
 
   const issues = report.issues_found;
 
+  const refreshing = pendingStatus !== null && !error;
+
   return (
     <AppShell>
       <div className="mx-auto max-w-6xl px-8 py-8">
+        {(stale || refreshing) && (
+          <div className="mb-4 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-700">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
+            {stale && !refreshing && "Showing previous audit. Upload a new CSV to refresh."}
+            {refreshing && stale && `Showing previous audit while we re-analyze… (${pendingStatus})`}
+            {refreshing && !stale && `Refreshing in background… (${pendingStatus})`}
+          </div>
+        )}
         {/* header */}
         <div className="flex items-start justify-between">
           <div>

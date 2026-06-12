@@ -80,6 +80,48 @@ export function clearJob() {
   window.dispatchEvent(new Event("bless:job"));
 }
 
+const REPORT_KEY = (jobId: string) => `bless_report_${jobId}`;
+const LAST_REPORT_KEY = "bless_last_report";
+
+export function cacheReport(jobId: string, report: Report) {
+  if (typeof window === "undefined") return;
+  try {
+    const json = JSON.stringify(report);
+    window.localStorage.setItem(REPORT_KEY(jobId), json);
+    window.localStorage.setItem(LAST_REPORT_KEY, json);
+  } catch {
+    // localStorage quota exceeded — silently drop the cache.
+  }
+}
+
+export function readCachedReport(
+  jobId: string,
+): { report: Report; fresh: boolean } | null {
+  if (typeof window === "undefined") return null;
+  const own = window.localStorage.getItem(REPORT_KEY(jobId));
+  if (own) {
+    try {
+      return { report: JSON.parse(own) as Report, fresh: true };
+    } catch {
+      window.localStorage.removeItem(REPORT_KEY(jobId));
+    }
+  }
+  const last = window.localStorage.getItem(LAST_REPORT_KEY);
+  if (last) {
+    try {
+      return { report: JSON.parse(last) as Report, fresh: false };
+    } catch {
+      window.localStorage.removeItem(LAST_REPORT_KEY);
+    }
+  }
+  return null;
+}
+
+export function clearCachedReport(jobId: string) {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(REPORT_KEY(jobId));
+}
+
 async function asError(res: Response): Promise<never> {
   let detail = res.statusText;
   try {
