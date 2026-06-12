@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 
 from ..db.clickhouse import set_job_status
-from ..integrations.langfuse import log_event, trace_span
+from ..integrations.langfuse import job_context, log_event, trace_span
 from . import detector, investigator, reporter
 
 log = logging.getLogger("bless.orchestrator")
@@ -17,7 +17,7 @@ log = logging.getLogger("bless.orchestrator")
 
 def run_job(job_id: str) -> None:
     """Top-level: runs the full Bless agent loop for one job."""
-    with trace_span("bless_run", trace_id=job_id):
+    with job_context(job_id):
         try:
             set_job_status(job_id, "investigating")
             log_event("step.investigate.start", {"job_id": job_id})

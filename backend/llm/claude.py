@@ -12,6 +12,9 @@ Design notes
 
 If ANTHROPIC_API_KEY is unset, `is_available()` returns False and callers
 should fall back to seed data / templated output.
+
+Each call is also logged to Langfuse as a generation (no-op if keys absent),
+including the prompt-cache token fields so cache hit rate is visible per call.
 """
 
 from __future__ import annotations
@@ -24,6 +27,7 @@ import anthropic
 from anthropic.types import MessageParam, TextBlockParam
 
 from ..config import get_settings
+from ..integrations.langfuse import observe_generation
 
 log = logging.getLogger("bless.claude")
 
@@ -70,6 +74,14 @@ def enrich_vendor(
         "cache_creation_input_tokens": resp.usage.cache_creation_input_tokens or 0,
         "cache_read_input_tokens": resp.usage.cache_read_input_tokens or 0,
     }
+    observe_generation(
+        name="enrich_vendor",
+        model=s.claude_model_enricher,
+        input_payload={"system": system_blocks, "user": user_message},
+        output=text,
+        usage=usage,
+        metadata={"max_tokens": ENRICHER_MAX_TOKENS, "role": "enricher"},
+    )
     return _parse_json_loose(text), usage
 
 
@@ -91,7 +103,22 @@ def generate_report_narrative(
         system=system,
         messages=[{"role": "user", "content": user}],
     )
-    data = _parse_json_loose(_first_text(resp.content))
+    text = _first_text(resp.content)
+    usage = {
+        "input_tokens": resp.usage.input_tokens,
+        "output_tokens": resp.usage.output_tokens,
+        "cache_creation_input_tokens": resp.usage.cache_creation_input_tokens or 0,
+        "cache_read_input_tokens": resp.usage.cache_read_input_tokens or 0,
+    }
+    observe_generation(
+        name="generate_report",
+        model=s.claude_model_reporter,
+        input_payload={"system": system, "user": user},
+        output=text,
+        usage=usage,
+        metadata={"max_tokens": REPORTER_MAX_TOKENS, "role": "reporter"},
+    )
+    data = _parse_json_loose(text)
     return (
         data.get("narrative_summary", "").strip(),
         data.get("top_action", "").strip(),
@@ -102,16 +129,41 @@ def chat_stream(
     system: str,
     messages: list[MessageParam],
 ) -> Iterable[str]:
-    """Streaming chat for /api/chat. Yields text deltas."""
+    """Streaming chat for /api/chat. Yields text deltas.
+
+    Emits a single Langfuse generation once the stream completes (with the
+    full accumulated text and final usage), in a `finally` so partial streams
+    are still recorded.
+    """
     s = get_settings()
-    with _get_client().messages.stream(
-        model=s.claude_model_chat,
-        max_tokens=2048,
-        system=system,
-        messages=messages,
-    ) as stream:
-        for chunk in stream.text_stream:
-            yield chunk
+    buf: list[str] = []
+    usage: dict[str, int] = {}
+    try:
+        with _get_client().messages.stream(
+            model=s.claude_model_chat,
+            max_tokens=2048,
+            system=system,
+            messages=messages,
+        ) as stream:
+            for chunk in stream.text_stream:
+                buf.append(chunk)
+                yield chunk
+            final = stream.get_final_message()
+            usage = {
+                "input_tokens": final.usage.input_tokens,
+                "output_tokens": final.usage.output_tokens,
+                "cache_creation_input_tokens": final.usage.cache_creation_input_tokens or 0,
+                "cache_read_input_tokens": final.usage.cache_read_input_tokens or 0,
+            }
+    finally:
+        observe_generation(
+            name="chat",
+            model=s.claude_model_chat,
+            input_payload={"system": system, "messages": list(messages)},
+            output="".join(buf),
+            usage=usage,
+            metadata={"max_tokens": 2048, "role": "chat", "streamed": True},
+        )
 
 
 # --- helpers --------------------------------------------------------------

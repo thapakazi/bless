@@ -1,12 +1,18 @@
-"""Langfuse tracing — real spans if keys are set, no-op decorators otherwise.
+"""Langfuse tracing — generations + spans nested under one trace per job.
 
-Callers use `@trace("step_name")` and `log_event("name", {...})`. The shape of
-caller code is identical with or without keys; this keeps adding observability
-later a one-line change.
+When LANGFUSE_PUBLIC_KEY/SECRET_KEY are absent, all hooks become no-ops so the
+caller code is identical whether tracing is on or off.
+
+Usage shape:
+    with job_context(job_id):                # opens trace
+        with trace_span("investigate"):      # span on trace
+            ...
+            observe_generation(name="enrich_vendor", ...)   # generation under span
 """
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import time
 from contextlib import contextmanager
@@ -20,6 +26,12 @@ log = logging.getLogger("bless.langfuse")
 
 _initialized = False
 _client = None
+_current_trace: contextvars.ContextVar = contextvars.ContextVar(
+    "bless_lf_trace", default=None
+)
+_current_job_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "bless_lf_job", default=None
+)
 
 
 def _maybe_init() -> None:
@@ -39,7 +51,7 @@ def _maybe_init() -> None:
             secret_key=s.langfuse_secret_key,
             host=s.langfuse_host,
         )
-        log.info("langfuse: client initialized")
+        log.info("langfuse: client initialized (host=%s)", s.langfuse_host)
     except Exception as e:
         log.warning("langfuse: init failed (%s); falling back to no-op", e)
         _client = None
@@ -50,15 +62,70 @@ def is_enabled() -> bool:
     return _client is not None
 
 
+def current_job_id() -> str | None:
+    return _current_job_id.get()
+
+
 @contextmanager
-def trace_span(name: str, trace_id: str | None = None, metadata: dict | None = None):
-    """Context manager that opens a Langfuse span (or logs to stdout)."""
+def job_context(
+    job_id: str, *, name: str = "bless_run", metadata: dict | None = None
+):
+    """Open the per-job trace. All spans/generations inside nest under it.
+
+    Also sets a ContextVar for `job_id` so downstream Claude calls can attach
+    themselves without the orchestrator threading `job_id` through every layer.
+    """
+    _maybe_init()
+    tok_job = _current_job_id.set(job_id)
+    trace = None
+    if _client is not None:
+        try:
+            trace = _client.trace(
+                name=name,
+                id=job_id,
+                session_id=job_id,
+                metadata=metadata or {},
+            )
+        except Exception as e:
+            log.warning("langfuse trace open failed: %s", e)
+            trace = None
+    tok_trace = _current_trace.set(trace)
+    t0 = time.perf_counter()
+    try:
+        yield trace
+    finally:
+        dt = (time.perf_counter() - t0) * 1000
+        log.info("trace %s done in %.0fms (job_id=%s)", name, dt, job_id)
+        _current_job_id.reset(tok_job)
+        _current_trace.reset(tok_trace)
+        if _client is not None:
+            try:
+                _client.flush()
+            except Exception:
+                pass
+
+
+@contextmanager
+def trace_span(
+    name: str, trace_id: str | None = None, metadata: dict | None = None
+):
+    """Open a span on the active trace. If called outside a job_context,
+    falls back to a standalone trace keyed by `trace_id`."""
     _maybe_init()
     t0 = time.perf_counter()
+    parent = _current_trace.get()
     span = None
     if _client is not None:
         try:
-            span = _client.trace(name=name, id=trace_id, metadata=metadata or {})
+            if parent is not None:
+                span = parent.span(name=name, metadata=metadata or {})
+            else:
+                span = _client.trace(
+                    name=name,
+                    id=trace_id,
+                    session_id=trace_id,
+                    metadata=metadata or {},
+                )
         except Exception as e:
             log.warning("langfuse span open failed: %s", e)
             span = None
@@ -66,7 +133,7 @@ def trace_span(name: str, trace_id: str | None = None, metadata: dict | None = N
         yield span
     finally:
         dt = (time.perf_counter() - t0) * 1000
-        log.info("trace %s done in %.0fms (trace_id=%s)", name, dt, trace_id)
+        log.info("span %s done in %.0fms (trace_id=%s)", name, dt, trace_id)
         if span is not None:
             try:
                 span.end()
@@ -94,7 +161,76 @@ def log_event(name: str, metadata: dict[str, Any] | None = None) -> None:
     log.info("event %s %s", name, metadata or {})
     if _client is None:
         return
+    parent = _current_trace.get()
     try:
-        _client.event(name=name, metadata=metadata or {})
+        if parent is not None:
+            parent.event(name=name, metadata=metadata or {})
+        else:
+            _client.event(name=name, metadata=metadata or {})
     except Exception as e:
         log.debug("langfuse log_event failed: %s", e)
+
+
+def observe_generation(
+    *,
+    name: str,
+    model: str,
+    input_payload: Any,
+    output: str,
+    usage: dict[str, int] | None = None,
+    metadata: dict | None = None,
+) -> None:
+    """Log an LLM call as a Langfuse generation.
+
+    Nests under the active trace (set by `job_context`) when one is in scope;
+    otherwise creates a standalone trace tagged with the current job_id.
+
+    Anthropic `usage` keys (`input_tokens`, `output_tokens`,
+    `cache_creation_input_tokens`, `cache_read_input_tokens`) are mapped to
+    Langfuse's usage schema; cache fields land in metadata so prompt-cache
+    behavior is visible per call.
+    """
+    _maybe_init()
+    if _client is None:
+        return
+    usage = usage or {}
+    md = dict(metadata or {})
+    md["cache_creation_input_tokens"] = usage.get(
+        "cache_creation_input_tokens", 0
+    )
+    md["cache_read_input_tokens"] = usage.get("cache_read_input_tokens", 0)
+    lf_usage = {
+        "input": usage.get("input_tokens", 0),
+        "output": usage.get("output_tokens", 0),
+        "total": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
+        "unit": "TOKENS",
+    }
+    parent = _current_trace.get()
+    job_id = _current_job_id.get()
+    try:
+        if parent is not None:
+            gen = parent.generation(
+                name=name,
+                model=model,
+                input=input_payload,
+                output=output,
+                usage=lf_usage,
+                metadata=md,
+            )
+        else:
+            standalone = _client.trace(
+                name=name,
+                session_id=job_id,
+                metadata={"job_id": job_id} if job_id else {},
+            )
+            gen = standalone.generation(
+                name=name,
+                model=model,
+                input=input_payload,
+                output=output,
+                usage=lf_usage,
+                metadata=md,
+            )
+        gen.end()
+    except Exception as e:
+        log.warning("langfuse generation log failed: %s", e)
