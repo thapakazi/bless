@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Env
+.env
+.env.local
+
+# Node
+node_modules/
+dist/
+build/
+.next/
+
+# ClickHouse local volume
+.clickhouse-data/
+
+# OS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+
+# Uploads
+uploads/
+*.tmp
