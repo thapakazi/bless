@@ -105,6 +105,34 @@ export async function getReport(jobId: string): Promise<Report> {
   return res.json();
 }
 
+export interface JobStatus {
+  job_id: string;
+  status: string;
+  error: string | null;
+  updated_at: string | null;
+}
+
+export async function getStatus(jobId: string): Promise<JobStatus> {
+  const res = await fetch(`${API_BASE}/api/status/${jobId}`);
+  if (!res.ok) return asError(res);
+  return res.json();
+}
+
+export interface JobSummary {
+  job_id: string;
+  status: string;
+  error: string | null;
+  started_at: string | null;
+  updated_at: string | null;
+  vendor_count: number;
+}
+
+export async function listJobs(): Promise<JobSummary[]> {
+  const res = await fetch(`${API_BASE}/api/jobs`);
+  if (!res.ok) return asError(res);
+  return (await res.json()).jobs;
+}
+
 export async function getProviders(): Promise<Provider[]> {
   const res = await fetch(`${API_BASE}/api/providers`);
   if (!res.ok) return asError(res);

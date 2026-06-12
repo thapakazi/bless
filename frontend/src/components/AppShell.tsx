@@ -2,12 +2,15 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { getJobId, getReport, money } from "@/lib/api";
+import { getJobId, getReport, getStatus, money } from "@/lib/api";
+
+const APPSHELL_POLL_MS = 5000;
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard", icon: GridIcon, needsJob: true },
   { href: "/", label: "New Upload", icon: UploadIcon, needsJob: false },
   { href: "/connections", label: "Connections", icon: PlugIcon, needsJob: false },
+  { href: "/jobs", label: "Jobs", icon: ListIcon, needsJob: false },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -31,14 +34,34 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       setSavings(null);
       return;
     }
-    let active = true;
-    getReport(jobId)
-      .then((r) => active && setSavings(r.potential_monthly_savings))
-      .catch(() => active && setSavings(null));
-    return () => {
-      active = false;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const tick = () => {
+      getStatus(jobId)
+        .then((s) => {
+          if (cancelled) return;
+          if (s.status === "complete") {
+            return getReport(jobId).then((r) => {
+              if (cancelled) return;
+              setSavings(r.potential_monthly_savings ?? null);
+            });
+          }
+          if (s.status === "failed") return;
+          timer = setTimeout(tick, APPSHELL_POLL_MS);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setSavings(null);
+        });
     };
-  }, [jobId, pathname]);
+    tick();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [jobId]);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#f6f6f7] text-neutral-900">
@@ -145,6 +168,14 @@ function PlugIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M9 2v6" /><path d="M15 2v6" /><path d="M6 8h12v3a6 6 0 0 1-12 0z" /><path d="M12 17v5" />
+    </svg>
+  );
+}
+function ListIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 6h13" /><path d="M8 12h13" /><path d="M8 18h13" />
+      <circle cx="3.5" cy="6" r="1.2" /><circle cx="3.5" cy="12" r="1.2" /><circle cx="3.5" cy="18" r="1.2" />
     </svg>
   );
 }

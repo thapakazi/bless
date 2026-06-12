@@ -4,24 +4,14 @@ import { useEffect, useState } from "react";
 import { ActionList } from "@/components/ActionList";
 import { AppShell } from "@/components/AppShell";
 import { SpendDonut } from "@/components/SpendDonut";
-import { getJobId, getReport, money, Report } from "@/lib/api";
+import { getJobId, getReport, getStatus, money, Report } from "@/lib/api";
 
-const IN_FLIGHT_STATUSES = new Set([
-  "ingested",
-  "enriching",
-  "investigating",
-  "detecting",
-  "reporting",
-]);
-
+const TERMINAL_STATUSES = new Set(["complete", "failed"]);
 const POLL_INTERVAL_MS = 3000;
-
-function isReportReady(r: Report): boolean {
-  return !IN_FLIGHT_STATUSES.has(r.status) && r.issues_found != null;
-}
 
 export default function DashboardPage() {
   const [report, setReport] = useState<Report | null>(null);
+  const [pendingStatus, setPendingStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
 
@@ -37,18 +27,26 @@ export default function DashboardPage() {
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     const tick = () => {
-      getReport(id)
-        .then((r) => {
+      getStatus(id)
+        .then((s) => {
           if (cancelled) return;
-          setReport(r);
-          setError(null);
-          if (!isReportReady(r)) {
-            timer = setTimeout(tick, POLL_INTERVAL_MS);
+          if (s.status === "failed") {
+            setError(s.error ?? "Job failed");
+            return;
           }
+          if (s.status === "complete") {
+            return getReport(id).then((r) => {
+              if (cancelled) return;
+              setReport(r);
+              setError(null);
+            });
+          }
+          setPendingStatus(s.status);
+          timer = setTimeout(tick, POLL_INTERVAL_MS);
         })
         .catch((e) => {
           if (cancelled) return;
-          setError(e instanceof Error ? e.message : "Failed to load report");
+          setError(e instanceof Error ? e.message : "Failed to load status");
         });
     };
     tick();
@@ -67,11 +65,11 @@ export default function DashboardPage() {
     );
   }
 
-  if (!report || !isReportReady(report)) {
+  if (!report) {
     return (
       <AppShell>
         <div className="grid min-h-full place-items-center text-neutral-400">
-          {error ?? (report ? `Analyzing your spend… (${report.status})` : "Loading report…")}
+          {error ?? (pendingStatus ? `Analyzing your spend… (${pendingStatus})` : "Loading report…")}
         </div>
       </AppShell>
     );
