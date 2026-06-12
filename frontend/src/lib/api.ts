@@ -133,6 +133,11 @@ export async function listJobs(): Promise<JobSummary[]> {
   return (await res.json()).jobs;
 }
 
+export async function deleteJob(jobId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/jobs/${jobId}`, { method: "DELETE" });
+  if (!res.ok) return asError(res);
+}
+
 export async function getProviders(): Promise<Provider[]> {
   const res = await fetch(`${API_BASE}/api/providers`);
   if (!res.ok) return asError(res);

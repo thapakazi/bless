@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { JobSummary, listJobs, setJobId } from "@/lib/api";
+import { clearJob, deleteJob, getJobId, JobSummary, listJobs, setJobId } from "@/lib/api";
 import { useRouter } from "next/navigation";
 
 const IN_FLIGHT = new Set(["ingested", "investigating", "detecting", "reporting"]);
@@ -19,7 +19,24 @@ const STATUS_STYLE: Record<string, string> = {
 export default function JobsPage() {
   const [jobs, setJobs] = useState<JobSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const router = useRouter();
+
+  async function onDelete(jobId: string) {
+    if (!window.confirm(`Delete job ${jobId.slice(0, 12)}…? All its data will be wiped.`)) {
+      return;
+    }
+    setDeleting(jobId);
+    try {
+      await deleteJob(jobId);
+      if (getJobId() === jobId) clearJob();
+      setJobs((curr) => (curr ?? []).filter((j) => j.job_id !== jobId));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -122,15 +139,24 @@ export default function JobsPage() {
                       {fmt(j.updated_at)}
                     </td>
                     <td className="px-5 py-3 text-right">
-                      <button
-                        onClick={() => {
-                          setJobId(j.job_id);
-                          router.push("/dashboard");
-                        }}
-                        className="rounded-lg border border-neutral-200 px-3 py-1.5 text-xs font-medium hover:bg-neutral-50"
-                      >
-                        Open
-                      </button>
+                      <div className="inline-flex gap-2">
+                        <button
+                          onClick={() => {
+                            setJobId(j.job_id);
+                            router.push("/dashboard");
+                          }}
+                          className="rounded-lg border border-neutral-200 px-3 py-1.5 text-xs font-medium hover:bg-neutral-50"
+                        >
+                          Open
+                        </button>
+                        <button
+                          onClick={() => onDelete(j.job_id)}
+                          disabled={deleting === j.job_id}
+                          className="rounded-lg border border-[#ef4444]/30 px-3 py-1.5 text-xs font-medium text-[#ef4444] hover:bg-[#fef2f2] disabled:opacity-50"
+                        >
+                          {deleting === j.job_id ? "Deleting…" : "Delete"}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))

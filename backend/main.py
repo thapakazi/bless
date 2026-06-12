@@ -115,6 +115,26 @@ def list_jobs(limit: int = 20):
     }
 
 
+@app.delete("/api/jobs/{job_id}")
+def delete_job(job_id: str):
+    """Wipe a job and all its data across transactions/enriched_vendors/waste_flags/jobs.
+
+    Accepted on any status, including in-flight. The BackgroundTask (if any) keeps
+    running until its next ClickHouse write, which becomes a no-op against the now-
+    empty rows. No process-level kill is attempted.
+    """
+    from .db.clickhouse import get_client
+
+    client = get_client()
+    for table in ("transactions", "enriched_vendors", "waste_flags", "jobs"):
+        client.command(
+            f"DELETE FROM {table} WHERE job_id = {{j:String}}",
+            parameters={"j": job_id},
+        )
+    log.info("Deleted job %s", job_id)
+    return {"job_id": job_id, "deleted": True}
+
+
 @app.get("/api/status/{job_id}")
 def status(job_id: str):
     """Cheap status probe — single ClickHouse row, no transaction fetch.
