@@ -17,6 +17,12 @@ node_modules/
 dist/
 build/
 .next/
+*.tsbuildinfo
+
+# Lockfiles — bun only
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
 
 # ClickHouse local volume
 .clickhouse-data/
