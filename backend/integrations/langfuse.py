@@ -26,8 +26,15 @@ log = logging.getLogger("bless.langfuse")
 
 _initialized = False
 _client = None
+# _current_trace: always the top-level trace for the job (used by
+#   update_current_trace and log_event so trace-level data lands on the trace).
+# _current_parent: the closest enclosing observation (trace OR span). New
+#   spans/generations attach here so nesting tracks the call stack.
 _current_trace: contextvars.ContextVar = contextvars.ContextVar(
     "bless_lf_trace", default=None
+)
+_current_parent: contextvars.ContextVar = contextvars.ContextVar(
+    "bless_lf_parent", default=None
 )
 _current_job_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "bless_lf_job", default=None
@@ -66,6 +73,38 @@ def current_job_id() -> str | None:
     return _current_job_id.get()
 
 
+def update_current_trace(
+    *,
+    input: Any | None = None,
+    output: Any | None = None,
+    tags: list[str] | None = None,
+    metadata: dict | None = None,
+) -> None:
+    """Update the open job trace with input/output/tags/metadata.
+
+    No-op outside a job_context or when Langfuse is disabled. Useful for
+    setting trace-level summary fields once you know the result of a job.
+    """
+    parent = _current_trace.get()
+    if parent is None:
+        return
+    payload: dict[str, Any] = {}
+    if input is not None:
+        payload["input"] = input
+    if output is not None:
+        payload["output"] = output
+    if tags is not None:
+        payload["tags"] = tags
+    if metadata is not None:
+        payload["metadata"] = metadata
+    if not payload:
+        return
+    try:
+        parent.update(**payload)
+    except Exception as e:
+        log.warning("langfuse trace update failed: %s", e)
+
+
 @contextmanager
 def job_context(
     job_id: str, *, name: str = "bless_run", metadata: dict | None = None
@@ -90,6 +129,7 @@ def job_context(
             log.warning("langfuse trace open failed: %s", e)
             trace = None
     tok_trace = _current_trace.set(trace)
+    tok_parent = _current_parent.set(trace)
     t0 = time.perf_counter()
     try:
         yield trace
@@ -97,6 +137,7 @@ def job_context(
         dt = (time.perf_counter() - t0) * 1000
         log.info("trace %s done in %.0fms (job_id=%s)", name, dt, job_id)
         _current_job_id.reset(tok_job)
+        _current_parent.reset(tok_parent)
         _current_trace.reset(tok_trace)
         if _client is not None:
             try:
@@ -110,7 +151,12 @@ def trace_span(
     name: str, trace_id: str | None = None, metadata: dict | None = None
 ):
     """Open a span on the active trace. If called outside a job_context,
-    falls back to a standalone trace keyed by `trace_id`."""
+    falls back to a standalone trace keyed by `trace_id`.
+
+    While the span is open it becomes the active parent in `_current_trace`,
+    so any `observe_generation` or nested `trace_span` calls inside the
+    `with` block nest under THIS span (not the outer trace).
+    """
     _maybe_init()
     t0 = time.perf_counter()
     parent = _current_trace.get()
@@ -129,9 +175,12 @@ def trace_span(
         except Exception as e:
             log.warning("langfuse span open failed: %s", e)
             span = None
+    tok = _current_trace.set(span) if span is not None else None
     try:
         yield span
     finally:
+        if tok is not None:
+            _current_trace.reset(tok)
         dt = (time.perf_counter() - t0) * 1000
         log.info("span %s done in %.0fms (trace_id=%s)", name, dt, trace_id)
         if span is not None:
@@ -176,7 +225,7 @@ def observe_generation(
     name: str,
     model: str,
     input_payload: Any,
-    output: str,
+    output: Any,
     usage: dict[str, int] | None = None,
     metadata: dict | None = None,
 ) -> None:

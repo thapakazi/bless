@@ -120,7 +120,9 @@ def enrich_one(vendor_name: str, monthly_amount: float, system_blocks) -> dict:
 
     user = f"Vendor: {vendor_name}\nMonthly spend: ${monthly_amount:.2f}"
     try:
-        raw, usage = claude.enrich_vendor(system_blocks, user)
+        raw, usage = claude.enrich_vendor(
+            system_blocks, user, vendor_name=vendor_name
+        )
         log.info(
             "enrich %s usage=%s",
             vendor_name,

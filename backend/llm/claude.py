@@ -53,6 +53,8 @@ def _get_client() -> anthropic.Anthropic:
 def enrich_vendor(
     system_blocks: list[TextBlockParam],
     user_message: str,
+    *,
+    vendor_name: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, int]]:
     """One enricher call. Returns (parsed JSON, usage).
 
@@ -75,14 +77,92 @@ def enrich_vendor(
         "cache_read_input_tokens": resp.usage.cache_read_input_tokens or 0,
     }
     observe_generation(
-        name="enrich_vendor",
+        name=f"enrich:{vendor_name}" if vendor_name else "enrich_vendor",
         model=s.claude_model_enricher,
         input_payload={"system": system_blocks, "user": user_message},
         output=text,
         usage=usage,
-        metadata={"max_tokens": ENRICHER_MAX_TOKENS, "role": "enricher"},
+        metadata={
+            "max_tokens": ENRICHER_MAX_TOKENS,
+            "role": "enricher",
+            "vendor_name": vendor_name,
+        },
     )
     return _parse_json_loose(text), usage
+
+
+def messages_create_traced(
+    *,
+    client: anthropic.Anthropic,
+    name: str,
+    model: str,
+    system: Any,
+    messages: list[dict],
+    tools: list[dict] | None = None,
+    max_tokens: int,
+    metadata: dict | None = None,
+):
+    """Thin wrapper around `client.messages.create` that emits a Langfuse
+    generation.
+
+    Used by the investigator (which runs its own tool-use loop) so each
+    Claude round is captured with full input/output/usage. Returns the raw
+    Anthropic response — callers still need to inspect `.content` for
+    tool_use blocks etc.
+    """
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": messages,
+    }
+    if tools:
+        kwargs["tools"] = tools
+    resp = client.messages.create(**kwargs)
+    output_payload = [
+        _block_to_dict(b) for b in resp.content
+    ] if resp.content else None
+    usage = {
+        "input_tokens": resp.usage.input_tokens,
+        "output_tokens": resp.usage.output_tokens,
+        "cache_creation_input_tokens": resp.usage.cache_creation_input_tokens or 0,
+        "cache_read_input_tokens": resp.usage.cache_read_input_tokens or 0,
+    }
+    md = dict(metadata or {})
+    md.setdefault("max_tokens", max_tokens)
+    md["stop_reason"] = resp.stop_reason
+    if tools:
+        md["tools"] = [t.get("name") or t.get("type") for t in tools]
+    observe_generation(
+        name=name,
+        model=model,
+        input_payload={"system": system, "messages": messages},
+        output=output_payload,
+        usage=usage,
+        metadata=md,
+    )
+    return resp
+
+
+def _block_to_dict(b) -> dict[str, Any]:
+    """Serialize an Anthropic content block (text / tool_use / tool_result)."""
+    t = getattr(b, "type", "unknown")
+    if t == "text":
+        return {"type": "text", "text": getattr(b, "text", "")}
+    if t == "tool_use":
+        return {
+            "type": "tool_use",
+            "id": getattr(b, "id", None),
+            "name": getattr(b, "name", None),
+            "input": getattr(b, "input", None),
+        }
+    if t == "tool_result":
+        return {
+            "type": "tool_result",
+            "tool_use_id": getattr(b, "tool_use_id", None),
+            "content": getattr(b, "content", None),
+        }
+    return {"type": t, "repr": repr(b)[:500]}
 
 
 def generate_report_narrative(

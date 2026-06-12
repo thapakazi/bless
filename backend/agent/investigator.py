@@ -199,12 +199,20 @@ def investigate_one(vendor_name: str, monthly_amount: float) -> dict:
 
     try:
         for round_idx in range(MAX_TOOL_ROUNDS):
-            resp = client.messages.create(
+            resp = claude.messages_create_traced(
+                client=client,
+                name=f"investigate:{vendor_name}:r{round_idx}",
                 model=model,
                 max_tokens=1500,
                 system=_system_blocks(),
                 tools=tools,
                 messages=messages,
+                metadata={
+                    "role": "investigator",
+                    "vendor_name": vendor_name,
+                    "round": round_idx,
+                    "monthly_amount": monthly_amount,
+                },
             )
             _accum(total_usage, resp.usage)
 
