@@ -38,11 +38,24 @@ SCHEMA = [
         startup_credits_url         String,
         cancel_url                  String,
         downgrade_url               String,
+        estimated_paid_seats        Int32 DEFAULT -1,
+        estimated_active_seats      Int32 DEFAULT -1,
+        utilization_pct             Int32 DEFAULT -1,
+        usage_summary               String DEFAULT '',
+        waste_evidence              String DEFAULT '',
+        investigation_sources       String DEFAULT '',
         enriched_at                 DateTime DEFAULT now()
     )
     ENGINE = MergeTree
     ORDER BY (job_id, vendor_name)
     """,
+    # idempotent column adds for upgrades from earlier schema
+    "ALTER TABLE enriched_vendors ADD COLUMN IF NOT EXISTS estimated_paid_seats Int32 DEFAULT -1",
+    "ALTER TABLE enriched_vendors ADD COLUMN IF NOT EXISTS estimated_active_seats Int32 DEFAULT -1",
+    "ALTER TABLE enriched_vendors ADD COLUMN IF NOT EXISTS utilization_pct Int32 DEFAULT -1",
+    "ALTER TABLE enriched_vendors ADD COLUMN IF NOT EXISTS usage_summary String DEFAULT ''",
+    "ALTER TABLE enriched_vendors ADD COLUMN IF NOT EXISTS waste_evidence String DEFAULT ''",
+    "ALTER TABLE enriched_vendors ADD COLUMN IF NOT EXISTS investigation_sources String DEFAULT ''",
     """
     CREATE TABLE IF NOT EXISTS jobs (
         job_id       String,

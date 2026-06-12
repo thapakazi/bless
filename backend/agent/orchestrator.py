@@ -10,7 +10,7 @@ import logging
 
 from ..db.clickhouse import set_job_status
 from ..integrations.langfuse import log_event, trace_span
-from . import detector, enricher, reporter
+from . import detector, investigator, reporter
 
 log = logging.getLogger("bless.orchestrator")
 
@@ -19,11 +19,11 @@ def run_job(job_id: str) -> None:
     """Top-level: runs the full Bless agent loop for one job."""
     with trace_span("bless_run", trace_id=job_id):
         try:
-            set_job_status(job_id, "enriching")
-            log_event("step.enrich.start", {"job_id": job_id})
-            with trace_span("enrich", trace_id=job_id):
-                n = enricher.enrich_job(job_id)
-            log_event("step.enrich.done", {"job_id": job_id, "vendors": n})
+            set_job_status(job_id, "investigating")
+            log_event("step.investigate.start", {"job_id": job_id})
+            with trace_span("investigate", trace_id=job_id):
+                n = investigator.investigate_job(job_id)
+            log_event("step.investigate.done", {"job_id": job_id, "vendors": n})
 
             set_job_status(job_id, "detecting")
             log_event("step.detect.start", {"job_id": job_id})
