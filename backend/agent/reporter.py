@@ -135,9 +135,44 @@ def build_report(job_id: str) -> dict:
     }
 
 
+# Compound or non-obvious vendor → domain mappings. Frontend renders logos via
+# google.com/s2/favicons, which needs the actual marketing domain.
+_VENDOR_DOMAINS = {
+    "apple developer": "developer.apple.com",
+    "google workspace": "workspace.google.com",
+    "google meet": "meet.google.com",
+    "google cloud": "cloud.google.com",
+    "aws": "aws.amazon.com",
+    "amazon web services": "aws.amazon.com",
+    "new relic": "newrelic.com",
+    "new relic observability": "newrelic.com",
+    "hubspot": "hubspot.com",
+    "github": "github.com",
+    "gitlab": "gitlab.com",
+    "notion": "notion.so",
+    "vercel": "vercel.com",
+    "netlify": "netlify.com",
+    "supabase": "supabase.com",
+    "sentry": "sentry.io",
+    "datadog": "datadoghq.com",
+    "intercom": "intercom.com",
+    "slack": "slack.com",
+    "zoom": "zoom.us",
+    "figma": "figma.com",
+    "sketch": "sketch.com",
+    "mailchimp": "mailchimp.com",
+    "linear": "linear.app",
+    "stripe": "stripe.com",
+}
+
+
 def _guess_domain(vendor: str) -> str:
-    # Cheap heuristic for clearbit logos; frontend falls back to initials on 404.
-    return vendor.lower().replace(" ", "") + ".com"
+    key = vendor.lower().strip()
+    if key in _VENDOR_DOMAINS:
+        return _VENDOR_DOMAINS[key]
+    # Fallback: collapse whitespace, lowercase, append .com. Works for single-word
+    # SaaS vendors; missing rows render initials in the frontend.
+    return key.replace(" ", "") + ".com"
 
 
 def _vendor_meta(job_id: str) -> dict[str, dict]:

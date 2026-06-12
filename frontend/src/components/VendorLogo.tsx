@@ -13,10 +13,13 @@ export function VendorLogo({ name, domain, size = 36 }: { name: string; domain?:
   const bg = PALETTE[name.charCodeAt(0) % PALETTE.length];
 
   if (domain && !failed) {
+    // Icon Horse auto-picks the highest-resolution icon a site exposes
+    // (apple-touch-icon, large PNG, manifest icon) — much sharper than
+    // Google S2, which upscales 16/32px favicons.
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img
-        src={`https://logo.clearbit.com/${domain}`}
+        src={`https://icon.horse/icon/${domain}`}
         alt={name}
         width={size}
         height={size}
