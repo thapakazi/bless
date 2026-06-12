@@ -5,11 +5,20 @@ narrative + top_action. Falls back to a templated narrative if no API key.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from ..db.clickhouse import get_client
 from ..llm import claude
 
 log = logging.getLogger("bless.reporter")
+
+
+# Map internal HIGH/MEDIUM/LOW priorities → frontend action_group buckets.
+_GROUP_META = {
+    "HIGH": {"key": "kill", "label": "Critical — cut these now", "color": "red"},
+    "MEDIUM": {"key": "rightsize", "label": "Rightsize", "color": "yellow"},
+    "LOW": {"key": "easy", "label": "Easy wins", "color": "green"},
+}
 
 
 REPORTER_SYSTEM = """You are a calm, witty CFO co-pilot named Bless. You write
@@ -123,4 +132,126 @@ def build_report(job_id: str) -> dict:
         **base,
         "narrative_summary": narrative,
         "top_action": top_action,
+    }
+
+
+def _guess_domain(vendor: str) -> str:
+    # Cheap heuristic for clearbit logos; frontend falls back to initials on 404.
+    return vendor.lower().replace(" ", "") + ".com"
+
+
+def _vendor_meta(job_id: str) -> dict[str, dict]:
+    client = get_client()
+    rows = client.query(
+        """
+        SELECT t.vendor_name, t.monthly_amount,
+               if(e.category = '', 'other', e.category) AS category
+        FROM transactions AS t
+        LEFT JOIN enriched_vendors AS e
+          ON t.job_id = e.job_id AND t.vendor_name = e.vendor_name
+        WHERE t.job_id = {j:String}
+        """,
+        parameters={"j": job_id},
+    ).result_rows
+    return {
+        r[0]: {"monthly_amount": float(r[1] or 0), "category": r[2] or "other"}
+        for r in rows
+    }
+
+
+def build_frontend_report(job_id: str) -> dict:
+    """Adapter: reshape build_report() output into the dashboard's expected shape.
+
+    The frontend Report contract lives in frontend/src/lib/api.ts. Keeping the
+    transform server-side lets the UI stay declarative.
+    """
+    base = build_report(job_id)
+    flags = base["flags"]
+    spend = base["total_monthly_spend"]
+    savings = base["total_savings_opportunity"]
+    vendor_meta = _vendor_meta(job_id)
+
+    # issues_found counts by priority bucket
+    pcount = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    for f in flags:
+        p = (f.get("priority") or "MEDIUM").upper()
+        if p in pcount:
+            pcount[p] += 1
+    issues_found = {
+        "total": len(flags),
+        "critical": pcount["HIGH"],
+        "medium": pcount["MEDIUM"],
+        "easy": pcount["LOW"],
+    }
+
+    # categories rollup: sum monthly_amount per category; mark flagged if any
+    # vendor in that category has at least one waste flag.
+    flagged_vendors = {f["vendor_name"] for f in flags}
+    cat_totals: dict[str, float] = {}
+    cat_flagged: dict[str, bool] = {}
+    for v, meta in vendor_meta.items():
+        c = meta["category"]
+        cat_totals[c] = cat_totals.get(c, 0.0) + meta["monthly_amount"]
+        cat_flagged[c] = cat_flagged.get(c, False) or (v in flagged_vendors)
+    categories = sorted(
+        [
+            {"category": c, "amount": round(t, 2), "flagged": cat_flagged[c]}
+            for c, t in cat_totals.items()
+        ],
+        key=lambda x: x["amount"],
+        reverse=True,
+    )
+
+    # action_groups: bucket flags into kill/rightsize/easy
+    buckets: dict[str, list[dict]] = {"HIGH": [], "MEDIUM": [], "LOW": []}
+    for f in flags:
+        p = (f.get("priority") or "MEDIUM").upper()
+        if p not in buckets:
+            p = "MEDIUM"
+        meta = vendor_meta.get(
+            f["vendor_name"], {"monthly_amount": 0.0, "category": "other"}
+        )
+        buckets[p].append(
+            {
+                "vendor_name": f["vendor_name"],
+                "domain": _guess_domain(f["vendor_name"]),
+                "category": meta["category"],
+                "monthly_amount": meta["monthly_amount"],
+                "flag_type": f["flag_type"],
+                "priority": p,
+                "monthly_savings": f["monthly_savings"],
+                "reasoning": f["reasoning"],
+                "action_label": f["action_label"],
+                "action_url": f["action_url"],
+                "source": "csv",
+            }
+        )
+    action_groups = []
+    for p in ("HIGH", "MEDIUM", "LOW"):
+        meta = _GROUP_META[p]
+        items = sorted(buckets[p], key=lambda x: x["monthly_savings"], reverse=True)
+        action_groups.append(
+            {
+                "key": meta["key"],
+                "label": meta["label"],
+                "priority": p,
+                "color": meta["color"],
+                "total_savings": round(sum(i["monthly_savings"] for i in items), 2),
+                "items": items,
+            }
+        )
+
+    return {
+        "job_id": job_id,
+        "status": "complete",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "total_monthly_spend": spend,
+        "potential_monthly_savings": savings,
+        "annual_savings": round(savings * 12, 2),
+        "vendor_count": base["vendor_count"],
+        "issues_found": issues_found,
+        "categories": categories,
+        "action_groups": action_groups,
+        "narrative_summary": base.get("narrative_summary", ""),
+        "top_action": base.get("top_action", ""),
     }

@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .agent.orchestrator import run_job
 from .agent.parser import parse_csv
-from .agent.reporter import build_report
+from .agent.reporter import build_frontend_report
 from .db.clickhouse import (
     fetch_transactions,
     get_job_status,
@@ -75,6 +75,64 @@ async def upload(background: BackgroundTasks, file: UploadFile = File(...)):
     }
 
 
+@app.get("/api/jobs")
+def list_jobs(limit: int = 20):
+    """Recent jobs with status + vendor count, newest first.
+
+    Frontend's /jobs page polls this every few seconds while any job is in-flight.
+    """
+    from .db.clickhouse import get_client
+
+    client = get_client()
+    rows = client.query(
+        """
+        SELECT j.job_id, j.status, j.error, j.started_at, j.updated_at,
+               coalesce(t.vendor_count, 0) AS vendor_count
+        FROM (SELECT job_id, status, error, started_at, updated_at
+              FROM jobs FINAL) AS j
+        LEFT JOIN (
+            SELECT job_id, count() AS vendor_count
+            FROM transactions
+            GROUP BY job_id
+        ) AS t USING (job_id)
+        ORDER BY j.updated_at DESC
+        LIMIT {n:UInt32}
+        """,
+        parameters={"n": max(1, min(int(limit), 100))},
+    ).result_rows
+    return {
+        "jobs": [
+            {
+                "job_id": r[0],
+                "status": r[1],
+                "error": r[2] or None,
+                "started_at": r[3].isoformat() if r[3] else None,
+                "updated_at": r[4].isoformat() if r[4] else None,
+                "vendor_count": int(r[5]),
+            }
+            for r in rows
+        ]
+    }
+
+
+@app.get("/api/status/{job_id}")
+def status(job_id: str):
+    """Cheap status probe — single ClickHouse row, no transaction fetch.
+
+    Frontend polls this while the agent loop runs, then switches to /api/report
+    once status is `complete` (or surfaces the error on `failed`).
+    """
+    job = get_job_status(job_id)
+    if not job:
+        raise HTTPException(404, f"No job for job_id={job_id}")
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "error": job.get("error") or None,
+        "updated_at": job.get("updated_at"),
+    }
+
+
 @app.get("/api/report/{job_id}")
 def report(job_id: str):
     rows = fetch_transactions(job_id)
@@ -96,7 +154,7 @@ def report(job_id: str):
         raise HTTPException(500, job.get("error") or "job failed")
 
     # complete (or unknown but data exists — render anyway)
-    full = build_report(job_id)
+    full = build_frontend_report(job_id)
     full["vendors"] = rows
     return full
 
