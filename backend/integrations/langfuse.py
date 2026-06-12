@@ -159,7 +159,7 @@ def trace_span(
     """
     _maybe_init()
     t0 = time.perf_counter()
-    parent = _current_trace.get()
+    parent = _current_parent.get()
     span = None
     if _client is not None:
         try:
@@ -175,12 +175,12 @@ def trace_span(
         except Exception as e:
             log.warning("langfuse span open failed: %s", e)
             span = None
-    tok = _current_trace.set(span) if span is not None else None
+    tok = _current_parent.set(span) if span is not None else None
     try:
         yield span
     finally:
         if tok is not None:
-            _current_trace.reset(tok)
+            _current_parent.reset(tok)
         dt = (time.perf_counter() - t0) * 1000
         log.info("span %s done in %.0fms (trace_id=%s)", name, dt, trace_id)
         if span is not None:
@@ -210,7 +210,7 @@ def log_event(name: str, metadata: dict[str, Any] | None = None) -> None:
     log.info("event %s %s", name, metadata or {})
     if _client is None:
         return
-    parent = _current_trace.get()
+    parent = _current_parent.get()
     try:
         if parent is not None:
             parent.event(name=name, metadata=metadata or {})
@@ -254,7 +254,7 @@ def observe_generation(
         "total": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
         "unit": "TOKENS",
     }
-    parent = _current_trace.get()
+    parent = _current_parent.get()
     job_id = _current_job_id.get()
     try:
         if parent is not None:
