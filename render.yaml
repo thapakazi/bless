@@ -1,0 +1,83 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+#
+# Bless — SaaS Spend Auditor — Render Blueprint
+#
+# Deploys two web services. The Render Workflow (agent loop) must be created
+# manually in the Render Dashboard after this blueprint deploys — see
+# docs/deploy.md for the click-through. The workflow's slug must then be set
+# on the backend's WORKFLOW_SLUG env var so /api/upload can dispatch runs.
+
+projects:
+  - name: bless
+    environments:
+      - name: production
+        services:
+
+          # ---- Backend — FastAPI + uv -----------------------------------
+          - type: web
+            name: bless-backend
+            runtime: python
+            plan: starter
+            region: oregon
+            healthCheckPath: /health
+            buildCommand: pip install uv && uv pip install --system -r backend/requirements.txt
+            startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+            envVars:
+              # ClickHouse Cloud
+              - key: CLICKHOUSE_HOST
+                sync: false
+              - key: CLICKHOUSE_PORT
+                value: "8443"
+              - key: CLICKHOUSE_DB
+                sync: false
+              - key: CLICKHOUSE_USER
+                sync: false
+              - key: CLICKHOUSE_PASSWORD
+                sync: false
+              # Anthropic
+              - key: ANTHROPIC_API_KEY
+                sync: false
+              - key: CLAUDE_MODEL_ENRICHER
+                value: claude-sonnet-4-6
+              - key: CLAUDE_MODEL_REPORTER
+                value: claude-opus-4-7
+              - key: CLAUDE_MODEL_CHAT
+                value: claude-opus-4-7
+              # Render Workflows dispatch (set after creating the workflow service)
+              - key: RENDER_API_KEY
+                sync: false
+              - key: WORKFLOW_SLUG
+                sync: false
+              # Langfuse (optional)
+              - key: LANGFUSE_PUBLIC_KEY
+                sync: false
+              - key: LANGFUSE_SECRET_KEY
+                sync: false
+              - key: LANGFUSE_HOST
+                value: https://cloud.langfuse.com
+              # Airbyte (optional)
+              - key: AIRBYTE_ORGANIZATION_ID
+                sync: false
+              - key: AIRBYTE_CLIENT_ID
+                sync: false
+              - key: AIRBYTE_CLIENT_SECRET
+                sync: false
+              - key: SLACK_CHANNEL
+                value: "#general"
+
+          # ---- Frontend — Next.js 16 + bun ------------------------------
+          - type: web
+            name: bless-frontend
+            runtime: node
+            plan: starter
+            region: oregon
+            rootDir: frontend
+            buildCommand: curl -fsSL https://bun.sh/install | bash && export PATH="$HOME/.bun/bin:$PATH" && bun install && bun run build
+            startCommand: export PATH="$HOME/.bun/bin:$PATH" && bun run start
+            envVars:
+              # Baked into the client bundle at build time, so this MUST be
+              # set before the first frontend deploy. Use the backend's full
+              # https://...onrender.com URL (Render's fromService gives only
+              # the host, not the scheme — pasting is simpler).
+              - key: NEXT_PUBLIC_API_BASE
+                sync: false

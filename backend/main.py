@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from contextlib import asynccontextmanager
 
@@ -65,14 +66,34 @@ async def upload(background: BackgroundTasks, file: UploadFile = File(...)):
     set_job_status(job_id, "ingested")
     log.info("Upload job_id=%s vendors=%d", job_id, inserted)
 
-    # Kick off the agent loop in the background.
-    background.add_task(run_job, job_id)
+    await _dispatch_job(background, job_id)
 
     return {
         "job_id": job_id,
         "vendor_count": inserted,
         "status": "ingested",
     }
+
+
+async def _dispatch_job(background: BackgroundTasks, job_id: str) -> None:
+    """Kick off the agent loop.
+
+    Prefers Render Workflows when RENDER_API_KEY + WORKFLOW_SLUG are set; otherwise
+    falls back to an in-process BackgroundTask (local dev / no-Render path).
+    """
+    workflow_slug = os.getenv("WORKFLOW_SLUG", "").strip()
+    render_key = os.getenv("RENDER_API_KEY", "").strip()
+    if workflow_slug and render_key:
+        try:
+            from render_sdk import RenderAsync  # lazy: only required in prod
+
+            client = RenderAsync(token=render_key)
+            task_run = await client.workflows.start_task(f"{workflow_slug}/run_job", [job_id])
+            log.info("Dispatched workflow run job_id=%s run_id=%s", job_id, getattr(task_run, "id", "?"))
+            return
+        except Exception:
+            log.exception("Render Workflows dispatch failed for job_id=%s; falling back to in-process", job_id)
+    background.add_task(run_job, job_id)
 
 
 @app.get("/api/jobs")
