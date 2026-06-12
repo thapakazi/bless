@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import date
 from typing import Iterable
 
@@ -43,6 +44,17 @@ SCHEMA = [
     ORDER BY (job_id, vendor_name)
     """,
     """
+    CREATE TABLE IF NOT EXISTS jobs (
+        job_id       String,
+        status       String,
+        error        String,
+        started_at   DateTime64(6) DEFAULT now64(6),
+        updated_at   DateTime64(6) DEFAULT now64(6)
+    )
+    ENGINE = ReplacingMergeTree(updated_at)
+    ORDER BY (job_id)
+    """,
+    """
     CREATE TABLE IF NOT EXISTS waste_flags (
         job_id           String,
         vendor_name      String,
@@ -60,21 +72,34 @@ SCHEMA = [
 ]
 
 
-_client: Client | None = None
+# Per-thread client. The clickhouse-connect HTTP driver rejects concurrent
+# queries on the same session, so the background agent loop and request
+# handlers must NOT share an instance.
+_local = threading.local()
 
 
 def get_client() -> Client:
-    global _client
-    if _client is None:
+    client = getattr(_local, "client", None)
+    if client is None:
         s = get_settings()
-        _client = clickhouse_connect.get_client(
+        # Auto-enable HTTPS when pointing at ClickHouse Cloud.
+        is_cloud = ".clickhouse.cloud" in s.clickhouse_host
+        secure = s.clickhouse_secure if s.clickhouse_secure is not None else is_cloud
+        # Cloud's HTTPS port is 8443; local HTTP is 8123. Honor explicit port,
+        # otherwise pick the right default.
+        port = s.clickhouse_port
+        if is_cloud and port == 8123:
+            port = 8443
+        client = clickhouse_connect.get_client(
             host=s.clickhouse_host,
-            port=s.clickhouse_port,
+            port=port,
             username=s.clickhouse_user,
             password=s.clickhouse_password,
             database=s.clickhouse_db,
+            secure=secure,
         )
-    return _client
+        _local.client = client
+    return client
 
 
 def init_schema() -> None:
@@ -143,6 +168,37 @@ def fetch_transactions(job_id: str) -> list[dict]:
         }
         for r in result.result_rows
     ]
+
+
+def set_job_status(job_id: str, status: str, error: str = "") -> None:
+    client = get_client()
+    client.insert(
+        "jobs",
+        [[job_id, status, error]],
+        column_names=["job_id", "status", "error"],
+    )
+
+
+def get_job_status(job_id: str) -> dict | None:
+    client = get_client()
+    rows = client.query(
+        """
+        SELECT status, error, started_at, updated_at
+        FROM jobs FINAL
+        WHERE job_id = {j:String}
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+        parameters={"j": job_id},
+    ).result_rows
+    if not rows:
+        return None
+    return {
+        "status": rows[0][0],
+        "error": rows[0][1],
+        "started_at": rows[0][2].isoformat() if rows[0][2] else None,
+        "updated_at": rows[0][3].isoformat() if rows[0][3] else None,
+    }
 
 
 def _to_date(v) -> date:

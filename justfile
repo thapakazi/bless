@@ -56,16 +56,18 @@ serve:
 
 # --- smoke test ---
 
-# End-to-end smoke: upload demo.csv, fetch report
-smoke:
-    @echo ">>> /health"
-    @curl -sf http://localhost:8000/health | python3 -m json.tool
-    @echo ">>> POST /api/upload (sample_data/demo.csv)"
-    @JOB=$(curl -sf -F "file=@sample_data/demo.csv" http://localhost:8000/api/upload | tee /tmp/bless_upload.json | python3 -c "import json,sys;print(json.load(sys.stdin)['job_id'])"); \
-    echo "job_id=$JOB"; \
-    echo ">>> GET /api/report/$JOB"; \
-    curl -sf "http://localhost:8000/api/report/$JOB" | python3 -m json.tool
+# End-to-end smoke: upload demo.csv, wait for agent loop, print Bless report
+smoke csv="sample_data/demo.csv":
+    @scripts/smoke.sh {{csv}}
 
-# Show row count in ClickHouse
+# Show row counts in ClickHouse (Cloud or local)
 count:
-    docker exec bless-clickhouse clickhouse-client -u bless --password bless --database bless --query "SELECT job_id, count() AS vendors FROM transactions GROUP BY job_id ORDER BY job_id"
+    @uv run python -c "from backend.db.clickhouse import get_client; c=get_client(); [print(r) for r in c.query('SELECT job_id, count() AS vendors, max(monthly_amount) AS top_spend FROM transactions GROUP BY job_id ORDER BY job_id').result_rows]"
+
+# Show every flag for a given job_id
+flags JOB:
+    @JOB={{JOB}} uv run python -c "import os;from backend.db.clickhouse import get_client; c=get_client(); [print(r) for r in c.query('SELECT priority, flag_type, vendor_name, monthly_savings FROM waste_flags WHERE job_id={j:String} ORDER BY monthly_savings DESC', parameters={'j': os.environ['JOB']}).result_rows]"
+
+# Watch dev-server logs (live)
+logs:
+    tail -f /private/tmp/claude-502/-Users-thapakazi-repos-thapakazi-bless/d08b639c-7389-4bdb-b505-0ecc803d189d/tasks/bh4nyyjvp.output 2>/dev/null || echo "background server task no longer running — start one with: just dev"

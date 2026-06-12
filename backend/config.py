@@ -10,16 +10,25 @@ class Settings(BaseSettings):
     clickhouse_db: str = "bless"
     clickhouse_user: str = "bless"
     clickhouse_password: str = "bless"
+    # ClickHouse Cloud needs HTTPS. Auto-enabled when host looks like *.clickhouse.cloud
+    # unless explicitly overridden.
+    clickhouse_secure: bool | None = None
 
-    pioneer_api_key: str = ""
-    pioneer_base_url: str = ""
-    pioneer_model: str = ""
+    anthropic_api_key: str = ""
+    claude_model_enricher: str = "claude-sonnet-4-6"
+    claude_model_reporter: str = "claude-opus-4-7"
+    claude_model_chat: str = "claude-opus-4-7"
 
     truefoundry_endpoint: str = ""
     truefoundry_api_key: str = ""
 
     guild_api_key: str = ""
 
+    # Airbyte Cloud OAuth client (preferred — matches Airbyte Cloud UI)
+    airbyte_organization_id: str = ""
+    airbyte_client_id: str = ""
+    airbyte_client_secret: str = ""
+    # Legacy single-key flow (kept for prompt.md compatibility)
     airbyte_api_key: str = ""
     airbyte_workspace_id: str = ""
 
