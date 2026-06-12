@@ -1,8 +1,16 @@
 "use client";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getJobId, getReport, getStatus, money } from "@/lib/api";
+
+// Lazily loaded — keeps the OpenUI chat bundle out of the initial page load and
+// off the server (the genui renderer is client-only).
+const ExplorerChat = dynamic(
+  () => import("./ExplorerChat").then((m) => m.ExplorerChat),
+  { ssr: false },
+);
 
 const APPSHELL_POLL_MS = 5000;
 
@@ -17,6 +25,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [jobId, setJobIdState] = useState<string | null>(null);
   const [savings, setSavings] = useState<number | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
 
   useEffect(() => {
     const sync = () => setJobIdState(getJobId());
@@ -129,18 +138,34 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       <main className="flex-1 overflow-y-auto">{children}</main>
 
-      <Link
-        href="/chat"
-        title="Ask the Bless assistant"
-        className="fixed bottom-6 right-6 grid h-11 w-11 place-items-center rounded-full bg-neutral-900 text-white shadow-lg hover:bg-neutral-700"
-      >
-        ?
-      </Link>
+      {/* The OpenUI Copilot shell sets its own 530px width / full height + border. */}
+      {chatOpen && (
+        <div className="shrink-0">
+          <ExplorerChat onClose={() => setChatOpen(false)} />
+        </div>
+      )}
+
+      {!chatOpen && (
+        <button
+          onClick={() => setChatOpen(true)}
+          title="Ask the Spend Explorer"
+          className="fixed bottom-6 right-6 z-20 flex items-center gap-2 rounded-full bg-neutral-900 px-4 py-3 text-sm font-medium text-white shadow-lg hover:bg-neutral-700"
+        >
+          <ChatIcon /> Explore
+        </button>
+      )}
     </div>
   );
 }
 
 /* --- icons (inline, no dep) --- */
+function ChatIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    </svg>
+  );
+}
 function TrendIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
